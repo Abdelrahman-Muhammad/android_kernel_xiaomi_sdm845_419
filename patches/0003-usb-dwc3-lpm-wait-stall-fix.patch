@@ -1,0 +1,54 @@
+diff --git a/drivers/usb/dwc3/dwc3-msm.c b/drivers/usb/dwc3/dwc3-msm.c
+index 10d18cd..c00b3b5 100644
+--- a/drivers/usb/dwc3/dwc3-msm.c
++++ b/drivers/usb/dwc3/dwc3-msm.c
+@@ -267,6 +267,18 @@ struct extcon_nb {
+ #define PM_QOS_SAMPLE_SEC	2
+ #define PM_QOS_THRESHOLD	400
+ 
++/*
++ * WAIT_FOR_LPM is only ever cleared by dwc3_msm_suspend() when the
++ * controller really made it into LPM.  If that never happens - for
++ * example because transfers were still in flight when the cable was
++ * pulled - the bit stays set and dwc3_otg_sm_work() stops looking at
++ * mdwc->inputs entirely, so every later plug/unplug is ignored and the
++ * gadget never comes back up.  Wait a bounded amount of time and then
++ * give up on LPM instead of stalling the state machine forever.
++ */
++#define LPM_WAIT_RETRY_DELAY	(msecs_to_jiffies(200))
++#define LPM_WAIT_MAX_RETRY	5
++
+ struct dwc3_msm {
+ 	struct device *dev;
+ 	void __iomem *base;
+@@ -345,6 +357,7 @@ struct dwc3_msm {
+ 
+ 	atomic_t                in_p3;
+ 	unsigned int		lpm_to_suspend_delay;
++	unsigned int		lpm_wait_count;
+ 	enum plug_orientation	typec_orientation;
+ 	u32			num_gsi_event_buffers;
+ 	struct dwc3_event_buffer **gsi_ev_buff;
+@@ -4763,8 +4776,20 @@ static void dwc3_otg_sm_work(struct work_struct *w)
+ 		/* fall-through */
+ 	case DRD_STATE_IDLE:
+ 		if (test_bit(WAIT_FOR_LPM, &mdwc->inputs)) {
+-			dev_dbg(mdwc->dev, "still not in lpm, wait.\n");
+-			break;
++			if (++mdwc->lpm_wait_count > LPM_WAIT_MAX_RETRY) {
++				dev_err(mdwc->dev,
++					"not in LPM after %d retries, giving up\n",
++					LPM_WAIT_MAX_RETRY);
++				clear_bit(WAIT_FOR_LPM, &mdwc->inputs);
++				mdwc->lpm_wait_count = 0;
++			} else {
++				dev_dbg(mdwc->dev, "still not in lpm, wait.\n");
++				work = 1;
++				delay = LPM_WAIT_RETRY_DELAY;
++				break;
++			}
++		} else {
++			mdwc->lpm_wait_count = 0;
+ 		}
+ 
+ 		if (!test_bit(ID, &mdwc->inputs)) {
