@@ -1,41 +1,60 @@
 diff --git a/drivers/power/supply/qcom/smb-lib.c b/drivers/power/supply/qcom/smb-lib.c
-index 1b1c467..dfb9476 100644
+index 1b1c467..1368f81 100644
 --- a/drivers/power/supply/qcom/smb-lib.c
 +++ b/drivers/power/supply/qcom/smb-lib.c
-@@ -5942,9 +5942,14 @@ static void smblib_dc_input_current_work(struct work_struct *work)
+@@ -5942,17 +5942,56 @@ static void smblib_dc_input_current_work(struct work_struct *work)
  }
  #endif
  
 +#define TYPEC_CC_BOUNCE_DEBOUNCE_MS	300
++#define TYPEC_CC_MAX_RETRY		3
 +
  void smblib_usb_typec_change(struct smb_charger *chg)
  {
  	int rc;
 +#if defined(CONFIG_MACH_XIAOMI_SDM845)
-+	int typec_mode;
++	int retry;
++	int typec_mode, new_mode;
 +#endif
  
  	rc = smblib_multibyte_read(chg, TYPE_C_STATUS_1_REG,
- 							chg->typec_status, 5);
-@@ -5953,6 +5958,23 @@ void smblib_usb_typec_change(struct smb_charger *chg)
+-							chg->typec_status, 5);
++						chg->typec_status, 5);
+ 	if (rc < 0) {
+ 		smblib_err(chg, "Couldn't cache USB Type-C status rc=%d\n", rc);
  		return;
  	}
  
 +#if defined(CONFIG_MACH_XIAOMI_SDM845)
 +	/*
-+	 * Debounce Type-C CC bounce storms (seen on beryllium when a cable
-+	 * is inserted/reinserted): only forward the change when the CC
-+	 * state remains stable for TYPEC_CC_BOUNCE_DEBOUNCE_MS. Any further
-+	 * CC change re-raises the typec-change IRQ, so genuine plug/unplug
-+	 * events are not lost, while rapid insertion/removal flapping no
-+	 * longer hits the USB psy / extcon / DWC3 in a loop.
++	 * Debounce the Type-C CC bounce storms that beryllium shows when a
++	 * cable is plugged or pulled: the port flaps between attached and
++	 * detached a few times per second, and every flap used to be
++	 * forwarded to the USB stack, which tears the gadget down and
++	 * never brings it back.
++	 *
++	 * The state has to be quiet for a whole debounce window before it
++	 * is reported.  Crucially this must never *drop* the interrupt:
++	 * if the state keeps moving for all retry windows we fall through
++	 * with whatever it settles on instead of returning early.  Simply
++	 * returning on a busy window loses the event that reports the final
++	 * state when the settle does not raise a new interrupt of its own,
++	 * and an unplug that is lost leaves EXTCON_USB asserted, so the
++	 * gadget is never torn down and the phone keeps claiming that a
++	 * cable is attached.
 +	 */
 +	typec_mode = smblib_get_prop_typec_mode(chg);
-+	msleep(TYPEC_CC_BOUNCE_DEBOUNCE_MS);
-+	rc = smblib_multibyte_read(chg, TYPE_C_STATUS_1_REG,
-+							chg->typec_status, 5);
-+	if (rc < 0 || smblib_get_prop_typec_mode(chg) != typec_mode)
-+		return;
++	for (retry = 0; retry < TYPEC_CC_MAX_RETRY; retry++) {
++		msleep(TYPEC_CC_BOUNCE_DEBOUNCE_MS);
++		rc = smblib_multibyte_read(chg, TYPE_C_STATUS_1_REG,
++						chg->typec_status, 5);
++		if (rc < 0)
++			return;
++		new_mode = smblib_get_prop_typec_mode(chg);
++		if (new_mode == typec_mode)
++			break;
++		typec_mode = new_mode;
++	}
 +#endif
 +
  	smblib_handle_typec_cc_state_change(chg);
