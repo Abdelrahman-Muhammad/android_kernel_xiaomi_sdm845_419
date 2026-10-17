@@ -1,0 +1,46 @@
+diff --git a/drivers/power/reset/msm-poweroff.c b/drivers/power/reset/msm-poweroff.c
+index 79740f0..7734104 100644
+--- a/drivers/power/reset/msm-poweroff.c
++++ b/drivers/power/reset/msm-poweroff.c
+@@ -42,6 +42,10 @@
+ #define SCM_DLOAD_BOTHDUMPS	(SCM_DLOAD_MINIDUMP | SCM_DLOAD_FULLDUMP)
+ 
+ #define DL_MODE_PROP "qcom,msm-imem-download_mode"
++
++/* How long to give PS_HOLD to take the system down before trying
++ * the next reset method. */
++#define PSR_HOLD_RESET_DELAY	500	/* ms */
+ #define EDL_MODE_PROP "qcom,msm-imem-emergency_download_mode"
+ #define IMEM_DL_TYPE_PROP "qcom,msm-imem-dload-type"
+ 
+@@ -588,7 +592,29 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
+ 	halt_spmi_pmic_arbiter();
+ 	deassert_ps_hold();
+ 
+-	msleep(10000);
++	/*
++	 * msm_restart_prepare() already programmed the PMIC with the reset
++	 * type it wants, so dropping PS_HOLD above should have taken the
++	 * system down.  The old code just slept for 10 seconds here and then
++	 * *returned* from the restart handler: the device stayed half dead
++	 * until the PMIC was kicked with a long power key press.  Give the
++	 * reset a short window instead and walk down the other reset paths
++	 * if it did not take effect.
++	 */
++	mdelay(PSR_HOLD_RESET_DELAY);
++
++	pr_warn("PS_HOLD did not reset the system, forcing a PON reset\n");
++	qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
++	mdelay(PSR_HOLD_RESET_DELAY);
++
++	pr_err("Still running after PS_HOLD/PON reset, causing a watchdog bite\n");
++	msm_trigger_wdog_bite();
++
++	/* A restart handler must never return. */
++	while (1) {
++		pr_err("Failed to reset the system\n");
++		msleep(2000);
++	}
+ }
+ 
+ static void do_msm_poweroff(void)
