@@ -35,13 +35,6 @@ jobs:
           cd android-kernel
           sed -i 's/ -dirty//g' scripts/setlocalversion
 
-      - name: Clone mi845 techpack (guarded)
-        run: |
-          cd "$GITHUB_WORKSPACE/kw/android-kernel"
-          if [ ! -d techpack/mi845 ]; then
-            git clone --depth=1 https://github.com/duckyduckG/kernel_techpack_mi845_419.git techpack/mi845
-          fi
-
       - name: Apply custom patches (USB debounce, DSI timeout)
         run: |
           cd "$GITHUB_WORKSPACE/kw/android-kernel"
