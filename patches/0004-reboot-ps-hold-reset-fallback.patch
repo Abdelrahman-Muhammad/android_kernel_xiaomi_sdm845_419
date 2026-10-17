@@ -1,39 +1,61 @@
 diff --git a/drivers/power/reset/msm-poweroff.c b/drivers/power/reset/msm-poweroff.c
-index 79740f0..7734104 100644
+index 79740f0..5646850 100644
 --- a/drivers/power/reset/msm-poweroff.c
 +++ b/drivers/power/reset/msm-poweroff.c
-@@ -42,6 +42,10 @@
+@@ -14,6 +14,7 @@
+ #include <linux/module.h>
+ #include <linux/reboot.h>
+ #include <linux/pm.h>
++#include <linux/psci.h>
+ #include <linux/delay.h>
+ #include <linux/input/qpnp-power-on.h>
+ #include <linux/of_address.h>
+@@ -42,6 +43,10 @@
  #define SCM_DLOAD_BOTHDUMPS	(SCM_DLOAD_MINIDUMP | SCM_DLOAD_FULLDUMP)
  
  #define DL_MODE_PROP "qcom,msm-imem-download_mode"
 +
-+/* How long to give PS_HOLD to take the system down before trying
-+ * the next reset method. */
++/* Time to give each reset method to take the system down before
++ * moving on to the next one. */
 +#define PSR_HOLD_RESET_DELAY	500	/* ms */
  #define EDL_MODE_PROP "qcom,msm-imem-emergency_download_mode"
  #define IMEM_DL_TYPE_PROP "qcom,msm-imem-dload-type"
  
-@@ -588,7 +592,29 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
+@@ -588,7 +593,43 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
  	halt_spmi_pmic_arbiter();
  	deassert_ps_hold();
  
 -	msleep(10000);
 +	/*
-+	 * msm_restart_prepare() already programmed the PMIC with the reset
-+	 * type it wants, so dropping PS_HOLD above should have taken the
-+	 * system down.  The old code just slept for 10 seconds here and then
-+	 * *returned* from the restart handler: the device stayed half dead
-+	 * until the PMIC was kicked with a long power key press.  Give the
-+	 * reset a short window instead and walk down the other reset paths
-+	 * if it did not take effect.
++	 * msm_restart_prepare() has already programmed the PMIC with the
++	 * reset type it wants, so dropping PS_HOLD above should take the
++	 * system down.  On beryllium it frequently does not: the old code
++	 * then slept for 10 seconds and *returned* from the restart
++	 * handler, which left a half dead system (black screen, Android
++	 * gone, Wi-Fi still answering) until the PMIC was kicked with a
++	 * long power key press.  Walk down the other reset paths instead
++	 * of sitting here, and never return.
 +	 */
 +	mdelay(PSR_HOLD_RESET_DELAY);
 +
-+	pr_warn("PS_HOLD did not reset the system, forcing a PON reset\n");
-+	qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
++	pr_warn("PS_HOLD did not reset the system, retrying via PON\n");
++	qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
++	mdelay(PSR_HOLD_RESET_DELAY);
++	deassert_ps_hold();
 +	mdelay(PSR_HOLD_RESET_DELAY);
 +
-+	pr_err("Still running after PS_HOLD/PON reset, causing a watchdog bite\n");
++	/*
++	 * Still alive.  PSCI goes straight to the secure firmware and does
++	 * not depend on the PMIC/SPMI handshake that is not working here,
++	 * so it is the last reset path that can actually be trusted.
++	 * CONFIG_ARM_PSCI_FW is enabled by default on this platform, so
++	 * drivers/firmware/psci.o is part of the image.
++	 */
++	pr_warn("Warm reset failed, resetting through PSCI\n");
++	psci_call(PSCI_0_2_FN_SYSTEM_RESET);
++	mdelay(PSR_HOLD_RESET_DELAY);
++
++	/* Belt and braces: a watchdog bite never returns. */
 +	msm_trigger_wdog_bite();
 +
 +	/* A restart handler must never return. */
