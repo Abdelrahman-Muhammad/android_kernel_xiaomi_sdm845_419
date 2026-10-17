@@ -35,7 +35,7 @@ jobs:
           cd android-kernel
           sed -i 's/ -dirty//g' scripts/setlocalversion
 
-      - name: Apply custom patches (USB debounce, DSI timeout)
+      - name: Apply custom patches (USB CC debounce, DWC3 LPM stall fix, reboot fallback)
         run: |
           cd "$GITHUB_WORKSPACE/kw/android-kernel"
           for p in "$GITHUB_WORKSPACE"/patches/*.patch; do
