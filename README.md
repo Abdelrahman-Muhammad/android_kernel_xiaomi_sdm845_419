@@ -36,3 +36,9 @@ Notes:
   `lineage-23.2_xiaomi` files of this branch.
 - Do NOT edit `drivers/power/supply/qcom/smblib.c` (doesn't exist) or `dwc3-qcom.c` (not built) —
   those paths from the Gemini guide are wrong for this tree.
+- Do NOT add a `kernel_techpack_mi845_419` clone as `techpack/mi845` (some older workflows do).
+  This branch already ships all mi845 drivers in-tree — `drivers/input/fingerprint/{fpc_tee,goodix_ta,synaptics}`,
+  `drivers/input/touchscreen/xiaomi/{focaltech_touch_mi,nt36xxx_mi}`, `drivers/mfd/spk-id.c`,
+  `drivers/leds/leds-lm3644.c`. `techpack/Kbuild` auto-includes any directory added there, so the clone
+  compiles a second copy and the final link fails with `ld.lld: duplicate symbol` (this actually broke the
+  first CI run on 2026-10-17).
