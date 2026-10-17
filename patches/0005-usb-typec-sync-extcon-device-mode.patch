@@ -1,0 +1,45 @@
+diff --git a/drivers/power/supply/qcom/smb-lib.c b/drivers/power/supply/qcom/smb-lib.c
+index 1b1c467..20a69d7 100644
+--- a/drivers/power/supply/qcom/smb-lib.c
++++ b/drivers/power/supply/qcom/smb-lib.c
+@@ -5225,8 +5225,24 @@ static void smblib_handle_apsd_done(struct smb_charger *chg, bool rising)
+ 		/* if not DCP, Enable pd here */
+ 		vote(chg->pd_disallowed_votable_indirect, HVDCP_TIMEOUT_VOTER,
+ 				false, 0);
++		/*
++		 * Xiaomi Type-C port (beryllium): dwc3-msm takes its vbus/id
++		 * events from this charger's extcon - see
++		 *   &usb0 { extcon = <&pmi8998_pdphy>, <&pmi8998_charger>, ... }
++		 * in qcom/sdm845-pmic-overlay.dtsi - so EXTCON_USB has to
++		 * follow the port state.
++		 *
++		 * With a Type-C connector and without qcom,use-extcon neither
++		 * condition below was ever true, so EXTCON_USB was never
++		 * asserted: USB appeared to work only because dwc3-msm forces
++		 * peripheral mode while probing.  As soon as the Type-C
++		 * disconnect tore the gadget down, a re-plug could never be
++		 * reported as a state change and ADB/MTP stayed dead until the
++		 * next reboot.
++		 */
+ 		if (chg->connector_type == POWER_SUPPLY_CONNECTOR_MICRO_USB
+-						|| chg->use_extcon)
++							|| chg->use_extcon ||
++							chg->connector_type == POWER_SUPPLY_CONNECTOR_TYPEC)
+ 			smblib_notify_device_mode(chg, true);
+ 		break;
+ 	case OCP_CHARGER_BIT:
+@@ -5748,6 +5764,14 @@ unlock:
+ 			smblib_notify_usb_host(chg, false);
+ 		else
+ 			smblib_notify_device_mode(chg, false);
++	} else if (chg->connector_type == POWER_SUPPLY_CONNECTOR_TYPEC) {
++		/*
++		 * Mirror the notification above for the Xiaomi Type-C port.
++		 * EXTCON_USB must drop on unplug, otherwise the next plug-in is
++		 * not a state change for extcon and dwc3-msm never re-arms the
++		 * gadget.
++		 */
++		smblib_notify_device_mode(chg, false);
+ 	}
+ 	chg->otg_present = false;
+ 
