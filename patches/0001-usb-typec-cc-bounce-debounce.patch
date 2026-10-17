@@ -1,0 +1,43 @@
+diff --git a/drivers/power/supply/qcom/smb-lib.c b/drivers/power/supply/qcom/smb-lib.c
+index 1b1c467..dfb9476 100644
+--- a/drivers/power/supply/qcom/smb-lib.c
++++ b/drivers/power/supply/qcom/smb-lib.c
+@@ -5942,9 +5942,14 @@ static void smblib_dc_input_current_work(struct work_struct *work)
+ }
+ #endif
+ 
++#define TYPEC_CC_BOUNCE_DEBOUNCE_MS	300
++
+ void smblib_usb_typec_change(struct smb_charger *chg)
+ {
+ 	int rc;
++#if defined(CONFIG_MACH_XIAOMI_SDM845)
++	int typec_mode;
++#endif
+ 
+ 	rc = smblib_multibyte_read(chg, TYPE_C_STATUS_1_REG,
+ 							chg->typec_status, 5);
+@@ -5953,6 +5958,23 @@ void smblib_usb_typec_change(struct smb_charger *chg)
+ 		return;
+ 	}
+ 
++#if defined(CONFIG_MACH_XIAOMI_SDM845)
++	/*
++	 * Debounce Type-C CC bounce storms (seen on beryllium when a cable
++	 * is inserted/reinserted): only forward the change when the CC
++	 * state remains stable for TYPEC_CC_BOUNCE_DEBOUNCE_MS. Any further
++	 * CC change re-raises the typec-change IRQ, so genuine plug/unplug
++	 * events are not lost, while rapid insertion/removal flapping no
++	 * longer hits the USB psy / extcon / DWC3 in a loop.
++	 */
++	typec_mode = smblib_get_prop_typec_mode(chg);
++	msleep(TYPEC_CC_BOUNCE_DEBOUNCE_MS);
++	rc = smblib_multibyte_read(chg, TYPE_C_STATUS_1_REG,
++							chg->typec_status, 5);
++	if (rc < 0 || smblib_get_prop_typec_mode(chg) != typec_mode)
++		return;
++#endif
++
+ 	smblib_handle_typec_cc_state_change(chg);
+ 
+ 	if (chg->typec_status[3] & TYPEC_VBUS_ERROR_STATUS_BIT)
