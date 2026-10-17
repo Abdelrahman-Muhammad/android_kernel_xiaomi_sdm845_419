@@ -1,60 +1,45 @@
 diff --git a/drivers/power/supply/qcom/smb-lib.c b/drivers/power/supply/qcom/smb-lib.c
-index 1b1c467..1368f81 100644
+index 1b1c467..833a13e 100644
 --- a/drivers/power/supply/qcom/smb-lib.c
 +++ b/drivers/power/supply/qcom/smb-lib.c
-@@ -5942,17 +5942,56 @@ static void smblib_dc_input_current_work(struct work_struct *work)
+@@ -5942,9 +5942,14 @@ static void smblib_dc_input_current_work(struct work_struct *work)
  }
  #endif
  
 +#define TYPEC_CC_BOUNCE_DEBOUNCE_MS	300
-+#define TYPEC_CC_MAX_RETRY		3
 +
  void smblib_usb_typec_change(struct smb_charger *chg)
  {
  	int rc;
 +#if defined(CONFIG_MACH_XIAOMI_SDM845)
-+	int retry;
-+	int typec_mode, new_mode;
++	int typec_mode;
 +#endif
  
  	rc = smblib_multibyte_read(chg, TYPE_C_STATUS_1_REG,
--							chg->typec_status, 5);
-+						chg->typec_status, 5);
- 	if (rc < 0) {
- 		smblib_err(chg, "Couldn't cache USB Type-C status rc=%d\n", rc);
+ 							chg->typec_status, 5);
+@@ -5953,6 +5958,27 @@ void smblib_usb_typec_change(struct smb_charger *chg)
  		return;
  	}
  
 +#if defined(CONFIG_MACH_XIAOMI_SDM845)
 +	/*
-+	 * Debounce the Type-C CC bounce storms that beryllium shows when a
-+	 * cable is plugged or pulled: the port flaps between attached and
-+	 * detached a few times per second, and every flap used to be
-+	 * forwarded to the USB stack, which tears the gadget down and
-+	 * never brings it back.
++	 * Debounce the Type-C CC bounce storms beryllium shows around a plug
++	 * or an unplug: the port flaps between attached and detached a few
++	 * times per second and every flap reaches the USB stack, which tears
++	 * the gadget down and leaves USB dead.
 +	 *
-+	 * The state has to be quiet for a whole debounce window before it
-+	 * is reported.  Crucially this must never *drop* the interrupt:
-+	 * if the state keeps moving for all retry windows we fall through
-+	 * with whatever it settles on instead of returning early.  Simply
-+	 * returning on a busy window loses the event that reports the final
-+	 * state when the settle does not raise a new interrupt of its own,
-+	 * and an unplug that is lost leaves EXTCON_USB asserted, so the
-+	 * gadget is never torn down and the phone keeps claiming that a
-+	 * cable is attached.
++	 * Only report a state that has been quiet for a whole debounce
++	 * window.  Dropping a busy window on purpose: handling a transient
++	 * state writes Type-C registers (DPDM request, power role), which
++	 * raises further CC interrupts, so acting on a flapping port feeds
++	 * itself.  Suppressing the transients is what lets it settle.
 +	 */
 +	typec_mode = smblib_get_prop_typec_mode(chg);
-+	for (retry = 0; retry < TYPEC_CC_MAX_RETRY; retry++) {
-+		msleep(TYPEC_CC_BOUNCE_DEBOUNCE_MS);
-+		rc = smblib_multibyte_read(chg, TYPE_C_STATUS_1_REG,
-+						chg->typec_status, 5);
-+		if (rc < 0)
-+			return;
-+		new_mode = smblib_get_prop_typec_mode(chg);
-+		if (new_mode == typec_mode)
-+			break;
-+		typec_mode = new_mode;
-+	}
++	msleep(TYPEC_CC_BOUNCE_DEBOUNCE_MS);
++	rc = smblib_multibyte_read(chg, TYPE_C_STATUS_1_REG,
++							chg->typec_status, 5);
++	if (rc < 0 || smblib_get_prop_typec_mode(chg) != typec_mode)
++		return;
 +#endif
 +
  	smblib_handle_typec_cc_state_change(chg);
