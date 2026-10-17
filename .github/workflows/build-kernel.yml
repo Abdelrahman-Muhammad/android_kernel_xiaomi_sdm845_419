@@ -1,0 +1,118 @@
+name: Build Poco F1 (beryllium) Kernel 4.19
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout (workflow + patches)
+        uses: actions/checkout@v4
+
+      - name: Add swap space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 10
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y git zip curl python3 bc bison flex libssl-dev libncurses5-dev build-essential
+
+      - name: Fetch toolchains (clang r487747c + GCC 4.9 64/32-bit)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/kw"
+          cd "$GITHUB_WORKSPACE/kw"
+          git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r487747c clang
+          git clone --depth=1 https://gitlab.com/crdroidandroid/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc-64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc-32
+
+      - name: Clone kernel source (this fork, branch lineage-23.2_xiaomi)
+        run: |
+          cd "$GITHUB_WORKSPACE/kw"
+          git clone --depth=1 -b lineage-23.2_xiaomi "https://github.com/${{ github.repository }}.git" android-kernel
+          cd android-kernel
+          sed -i 's/ -dirty//g' scripts/setlocalversion
+
+      - name: Clone mi845 techpack (guarded)
+        run: |
+          cd "$GITHUB_WORKSPACE/kw/android-kernel"
+          if [ ! -d techpack/mi845 ]; then
+            git clone --depth=1 https://github.com/duckyduckG/kernel_techpack_mi845_419.git techpack/mi845
+          fi
+
+      - name: Apply custom patches (USB debounce, DSI timeout)
+        run: |
+          cd "$GITHUB_WORKSPACE/kw/android-kernel"
+          for p in "$GITHUB_WORKSPACE"/patches/*.patch; do
+            echo "Applying: $p"
+            git apply -v "$p"
+          done
+
+      - name: Build Image.gz-dtb
+        run: |
+          cd "$GITHUB_WORKSPACE/kw/android-kernel"
+          export ARCH=arm64 SUBARCH=arm
+          export PATH="$GITHUB_WORKSPACE/kw/clang/bin:$GITHUB_WORKSPACE/kw/gcc-64/bin:$GITHUB_WORKSPACE/kw/gcc-32/bin:$PATH"
+          export KBUILD_BUILD_USER="$(echo '${{ github.actor }}' | tr 'A-Z' 'a-z')"
+          export KBUILD_BUILD_HOST=github
+
+          BA="CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-android- CROSS_COMPILE_ARM32=arm-linux-androideabi-"
+          EX="LD=ld.lld LLVM=1 LLVM_IAS=1"
+
+          echo "--- base defconfig ---"
+          make O=out ARCH=arm64 CC=clang $BA $EX vendor/sdm845-perf_defconfig
+
+          echo "--- xiaomi config fragments ---"
+          cat arch/arm64/configs/vendor/xiaomi/sdm845-common.config >> out/.config
+          cat arch/arm64/configs/vendor/xiaomi/beryllium.config     >> out/.config
+          make O=out ARCH=arm64 CC=clang $BA $EX olddefconfig
+
+          echo "--- build ---"
+          make -j"$(nproc)" O=out ARCH=arm64 CC=clang $BA $EX dtbs
+          make -j"$(nproc)" O=out ARCH=arm64 CC=clang $BA $EX Image.gz-dtb
+
+          ls -lh out/arch/arm64/boot/Image.gz-dtb
+
+      - name: Package AnyKernel3 zip
+        run: |
+          cd "$GITHUB_WORKSPACE/kw"
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+          cd AnyKernel3
+          rm -rf .git .github README.md
+          cp ../android-kernel/out/arch/arm64/boot/Image.gz-dtb ./
+
+          cat > anykernel.sh <<'EOF'
+          properties() { '
+          kernel.string=Poco F1 (beryllium) Kernel 4.19
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=beryllium
+          device.name2=Poco F1
+          '; } # end properties
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          set_perm_recursive 0 0 755 644 $ramdisk/*;
+          set_perm_recursive 0 0 750 750 $ramdisk/init* $ramdisk/sbin;
+
+          dump_boot;
+          write_boot;
+          EOF
+
+          zip -r "$GITHUB_WORKSPACE/PocoF1-4.19-Kernel.zip" ./*
+
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocoF1-4.19-Kernel
+          path: PocoF1-4.19-Kernel.zip
