@@ -89,6 +89,7 @@ jobs:
           '; } # end properties
 
           block=/dev/block/bootdevice/by-name/boot;
+          partition=boot;
           is_slot_device=0;
           ramdisk_compression=auto;
           patch_vbmeta_flag=auto;
